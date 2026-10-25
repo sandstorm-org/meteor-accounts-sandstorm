@@ -1,45 +1,28 @@
 // Copyright (c) 2014 Sandstorm Development Group, Inc. and contributors
-// Licensed under the MIT License:
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
+// Licensed under the MIT License. See LICENSE.
+
+/* global Package */
 
 Package.describe({
-  summary: "Login service for Sandstorm.io applications",
-  version: "0.7.0",
   name: "kenton:accounts-sandstorm",
-  git: "https://github.com/sandstorm-io/meteor-accounts-sandstorm.git"
+  version: "0.8.0",
+  summary: "Login service for Sandstorm applications, updated for Meteor 3",
+  git: "https://github.com/sandstorm-io/meteor-accounts-sandstorm.git",
 });
 
-Package.onUse(function(api) {
-  api.versionsFrom('1.5.1');
-
-  api.use('random', ['client', 'server']);
-  api.use('accounts-base', ['client', 'server'], {weak: true});
-  api.use('webapp', 'server');
-  api.use('http', 'client');
-  api.use('tracker', 'client');
-  api.use('reactive-var', 'client');
-  api.use('check', 'server');
-  api.use('ddp-server', 'server');
-
-  api.addFiles("client.js", "client");
-  api.addFiles("server.js", "server");
-
+Package.onUse((api) => {
+  api.versionsFrom("3.4.1");
+  api.use(["ecmascript", "meteor", "random"], ["client", "server"]);
+  api.use("accounts-base", ["client", "server"], { weak: true });
+  api.use(["ddp-client", "tracker", "reactive-var"], "client");
+  api.use(["check", "ddp-server", "webapp"], "server");
+  api.mainModule("client.js", "client");
+  api.mainModule("server.js", "server");
   api.export("SandstormAccounts", "client");
+});
+
+Package.onTest((api) => {
+  api.versionsFrom("3.4.1");
+  api.use(["ecmascript", "meteortesting:mocha"]);
+  api.mainModule("rendezvous.tests.js", "server");
 });

@@ -1,210 +1,175 @@
 // Copyright (c) 2014 Sandstorm Development Group, Inc. and contributors
-// Licensed under the MIT License:
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
+// Licensed under the MIT License. See LICENSE.
+
+import { check } from "meteor/check";
+import { Meteor } from "meteor/meteor";
+import { WebApp } from "meteor/webapp";
+import { LoginRendezvous } from "./rendezvous";
+
+const LOGIN_TIMEOUT_MS = 10000;
+const MAX_PENDING_LOGINS = 1024;
+const MAX_TOKEN_BYTES = 4096;
+const pendingLogins = new LoginRendezvous({
+  maxPending: MAX_PENDING_LOGINS,
+  timeoutMs: LOGIN_TIMEOUT_MS,
+  makeError: (code, message) => new Meteor.Error(code, message),
+});
 
 if (process.env.SANDSTORM) {
-  __meteor_runtime_config__.SANDSTORM = true;
+  globalThis.__meteor_runtime_config__ ||= {};
+  globalThis.__meteor_runtime_config__.SANDSTORM = true;
 }
 
-if (__meteor_runtime_config__.SANDSTORM) {
-  if (Package["accounts-base"]) {
-    // Highlander Mode: Disable all non-Sandstorm login mechanisms.
-    Package["accounts-base"].Accounts.validateLoginAttempt(function (attempt) {
-      if (!attempt.allowed) {
-        return false;
-      }
+const accountsPackage = globalThis.Package?.["accounts-base"];
+const Accounts = accountsPackage?.Accounts;
+
+function decodeHeader(value, name) {
+  if (typeof value !== "string") {
+    if (name === "x-sandstorm-username") return "";
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new Meteor.Error(400, `Invalid encoding in ${name}.`);
+  }
+}
+
+async function readToken(request) {
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of request) {
+    length += chunk.length;
+    if (length > MAX_TOKEN_BYTES) {
+      throw new Meteor.Error(413, "Sandstorm login token is too large.");
+    }
+
+    chunks.push(chunk);
+  }
+
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function handleLoginPost(request, response) {
+  try {
+    if (request.method !== "POST") {
+      throw new Meteor.Error(405, "Sandstorm login endpoint requires POST.");
+    }
+
+    const contentType = request.headers["content-type"]?.split(";", 1)[0].trim();
+    if (contentType !== "application/x-sandstorm-login-token") {
+      throw new Meteor.Error(415, "Wrong Content-Type for /.sandstorm-login.");
+    }
+
+    const token = await readToken(request);
+    const resolved = pendingLogins.resolve(token, {
+      sandstorm: {
+        id: request.headers["x-sandstorm-user-id"] || null,
+        name: decodeHeader(request.headers["x-sandstorm-username"], "x-sandstorm-username"),
+        permissions: (request.headers["x-sandstorm-permissions"] || "")
+            .split(",").filter(Boolean),
+        picture: request.headers["x-sandstorm-user-picture"] || null,
+        preferredHandle: request.headers["x-sandstorm-preferred-handle"] || null,
+        pronouns: request.headers["x-sandstorm-user-pronouns"] || null,
+      },
+      sessionId: request.headers["x-sandstorm-session-id"] || null,
+      tabId: request.headers["x-sandstorm-tab-id"] || null,
+    });
+    if (!resolved) {
+      throw new Meteor.Error(404, "No current login request matches this token.");
+    }
+
+    response.writeHead(204);
+    response.end();
+  } catch (error) {
+    const status = error.error >= 400 && error.error < 600 ? error.error : 500;
+    response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end(error.reason || error.message);
+  }
+}
+
+if (globalThis.__meteor_runtime_config__.SANDSTORM) {
+  if (Accounts) {
+    Accounts.validateLoginAttempt((attempt) => {
+      if (!attempt.allowed) return false;
       if (attempt.type !== "sandstorm") {
         throw new Meteor.Error(403, "Non-Sandstorm login mechanisms disabled on Sandstorm.");
       }
+
       return true;
     });
-    Package["accounts-base"].Accounts.validateNewUser(function (user) {
+
+    Accounts.validateNewUser((user) => {
       if (!user.services.sandstorm) {
         throw new Meteor.Error(403, "Non-Sandstorm login mechanisms disabled on Sandstorm.");
       }
+
       return true;
+    });
+
+    Meteor.startup(async () => {
+      await Meteor.users.rawCollection().createIndex(
+        { "services.sandstorm.id": 1 },
+        { unique: true, sparse: true },
+      );
     });
   }
 
-  var Future = Npm.require("fibers/future");
-
-  var inMeteor = Meteor.bindEnvironment(function (callback) {
-    callback();
-  });
-
-  var logins = {};
-  // Maps tokens to currently-waiting login method calls.
-
-  if (Package["accounts-base"]) {
-    Meteor.users._ensureIndex("services.sandstorm.id", {unique: 1, sparse: 1});
-  }
-
-  Meteor.onConnection(function (connection) {
+  Meteor.onConnection((connection) => {
     connection._sandstormUser = null;
     connection._sandstormSessionId = null;
     connection._sandstormTabId = null;
-    connection.sandstormUser = function () {
+    const requireLogin = (value) => {
       if (!connection._sandstormUser) {
         throw new Meteor.Error(400, "Client did not complete authentication handshake.");
       }
-      return this._sandstormUser;
+
+      return value;
     };
-    connection.sandstormSessionId = function () {
-      if (!connection._sandstormUser) {
-        throw new Meteor.Error(400, "Client did not complete authentication handshake.");
-      }
-      return this._sandstormSessionId;
-    }
-    connection.sandstormTabId = function () {
-      if (!connection._sandstormUser) {
-        throw new Meteor.Error(400, "Client did not complete authentication handshake.");
-      }
-      return this._sandstormTabId;
-    }
+
+    connection.sandstormUser = () => requireLogin(connection._sandstormUser);
+    connection.sandstormSessionId = () => requireLogin(connection._sandstormSessionId);
+    connection.sandstormTabId = () => requireLogin(connection._sandstormTabId);
   });
 
   Meteor.methods({
-    loginWithSandstorm: function (token) {
+    async loginWithSandstorm(token) {
       check(token, String);
-
-      var future = new Future();
-
-      logins[token] = future;
-
-      var timeout = setTimeout(function () {
-        future.throw(new Meteor.Error("timeout", "Gave up waiting for login rendezvous XHR."));
-      }, 10000);
-
-      var info;
-      try {
-        info = future.wait();
-      } finally {
-        clearTimeout(timeout);
-        delete logins[token];
+      if (Buffer.byteLength(token) > MAX_TOKEN_BYTES) {
+        throw new Meteor.Error(413, "Sandstorm login token is too large.");
       }
 
-      // Set connection info. The call to setUserId() resets all publishes. We update the
-      // connection's sandstorm info first so that when the publishes are re-run they'll see the
-      // new info. In theory we really want to update it exactly when this.userId is updated, but
-      // we'd have to dig into Meteor internals to pull that off. Probably updating it a little
-      // early is fine?
-      //
-      // Note that calling setUserId() with the same ID a second time still goes through the motions
-      // of restarting all subscriptions, which is important if the permissions changed. Hopefully
-      // Meteor won't decide to "optimize" this by returning early if the user ID hasn't changed.
+      const info = await pendingLogins.wait(token);
       this.connection._sandstormUser = info.sandstorm;
       this.connection._sandstormSessionId = info.sessionId;
       this.connection._sandstormTabId = info.tabId;
-      this.setUserId(info.userId);
 
-      return info;
-    }
+      let userId = info.sandstorm.id;
+      if (Accounts) {
+        if (info.sandstorm.id) {
+          const result = await Accounts.updateOrCreateUserFromExternalService(
+            "sandstorm",
+            info.sandstorm,
+            { profile: { name: info.sandstorm.name } },
+          );
+          userId = result.userId;
+        } else {
+          userId = null;
+        }
+      }
+
+      this.setUserId(userId);
+      return { ...info, userId };
+    },
   });
 
-  WebApp.rawConnectHandlers.use(function (req, res, next) {
-    if (req.url === "/.sandstorm-login") {
-      handlePostToken(req, res);
+  WebApp.rawConnectHandlers.use((request, response, next) => {
+    if (new URL(request.url, "http://localhost").pathname !== "/.sandstorm-login") {
+      next();
       return;
     }
-    return next();
-  });
 
-  function readAll(stream) {
-    var future = new Future();
-
-    var chunks = [];
-    stream.on("data", function (chunk) {
-      chunks.push(chunk.toString());
-    });
-    stream.on("error", function (err) {
-      future.throw(err);
-    });
-    stream.on("end", function () {
-      future.return();
-    });
-
-    future.wait();
-
-    return chunks.join("");
-  }
-
-  var handlePostToken = Meteor.bindEnvironment(function (req, res) {
-    inMeteor(function () {
-      try {
-        // Note that cross-origin POSTs cannot set arbitrary Content-Types without explicit CORS
-        // permission, so this effectively prevents XSRF.
-        if (req.headers["content-type"].split(";")[0].trim() !== "application/x-sandstorm-login-token") {
-          throw new Error("wrong Content-Type for .sandstorm-login: " + req.headers["content-type"]);
-        }
-
-        var token = readAll(req);
-
-        var future = logins[token];
-        if (!future) {
-          throw new Error("no current login request matching token");
-        }
-
-        var permissions = req.headers["x-sandstorm-permissions"];
-        if (permissions && permissions !== "") {
-          permissions = permissions.split(",");
-        } else {
-          permissions = [];
-        }
-
-        var sandstormInfo = {
-          id: req.headers["x-sandstorm-user-id"] || null,
-          name: decodeURIComponent(req.headers["x-sandstorm-username"]),
-          permissions: permissions,
-          picture: req.headers["x-sandstorm-user-picture"] || null,
-          preferredHandle: req.headers["x-sandstorm-preferred-handle"] || null,
-          pronouns: req.headers["x-sandstorm-user-pronouns"] || null,
-        };
-
-        var userInfo = {sandstorm: sandstormInfo};
-        if (Package["accounts-base"]) {
-          if (sandstormInfo.id) {
-            // The user is logged into Sandstorm. Create a Meteor account for them, or find the
-            // existing one, and record the user ID.
-            var login = Package["accounts-base"].Accounts.updateOrCreateUserFromExternalService(
-              "sandstorm", sandstormInfo, {profile: {name: sandstormInfo.name}});
-            userInfo.userId = login.userId;
-          } else {
-            userInfo.userId = null;
-          }
-        } else {
-          // Since the app isn't using regular Meteor accounts, we can define Meteor.userId()
-          // however we want.
-          userInfo.userId = sandstormInfo.id;
-        }
-
-        userInfo.sessionId = req.headers["x-sandstorm-session-id"] || null;
-        userInfo.tabId = req.headers["x-sandstorm-tab-id"] || null;
-        future.return(userInfo);
-        res.writeHead(204, {});
-        res.end();
-      } catch (err) {
-        res.writeHead(500, {
-          "Content-Type": "text/plain"
-        });
-        res.end(err.stack);
-      }
-    });
+    void handleLoginPost(request, response);
   });
 }
