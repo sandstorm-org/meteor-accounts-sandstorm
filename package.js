@@ -4,10 +4,10 @@
 /* global Package */
 
 Package.describe({
-  name: "kenton:accounts-sandstorm",
-  version: "0.8.0",
+  name: "sandstormorg:accounts-sandstorm",
+  version: "0.10.0",
   summary: "Login service for Sandstorm applications, updated for Meteor 3",
-  git: "https://github.com/sandstorm-io/meteor-accounts-sandstorm.git",
+  git: "https://github.com/sandstorm-org/meteor-accounts-sandstorm.git",
 });
 
 Package.onUse((api) => {

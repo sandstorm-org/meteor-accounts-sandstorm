@@ -1,6 +1,6 @@
-# Sandstorm.io login integration for Meteor.js
+# Sandstorm login integration for Meteor.js
 
-[Sandstorm](https://sandstorm.io) is a platform for personal clouds that makes
+[Sandstorm](https://sandstorm.org) is a platform for personal clouds that makes
 installing apps to your personal server as easy as installing apps to your
 phone.
 
@@ -19,10 +19,10 @@ populated from Sandstorm. When using this package, you should not use
 To use this package in your Meteor project, simply install it from the Meteor
 package repository:
 
-    meteor add kenton:accounts-sandstorm
+    meteor add sandstormorg:accounts-sandstorm
 
 To package a Meteor app for Sandstorm, see
-[the Meteor app packaging guide](https://docs.sandstorm.io/en/latest/vagrant-spk/packaging-tutorial-meteor/).
+[the Meteor app packaging guide](https://docs.sandstorm.org/en/latest/vagrant-spk/packaging-tutorial-meteor/).
 
 Note that this package does nothing if the `SANDSTORM` environment variable is
 not set. Therefore, it is safe to include the package even in non-Sandstorm
@@ -58,7 +58,7 @@ Either of these will return an object containing the following fields:
 * `pronouns`: From `X-Sandstorm-User-Pronouns`, indicates the pronouns
   by which the user prefers to be referred.
 
-See [the Sandstorm docs](https://docs.sandstorm.io/en/latest/developing/auth/#headers-that-an-app-receives) for more information about these fields.
+See [the Sandstorm docs](https://docs.sandstorm.org/en/latest/developing/auth/#headers-that-an-app-receives) for more information about these fields.
 
 Note that `sandstormUser()` may return `null` on the client side if the login
 handshake has not completed yet (`Meteor.loggingIn()` returns `true` during
@@ -101,7 +101,7 @@ permissions, for a few reasons:
 it's often a lot more convenient to develop Meteor apps using Meteor's normal dev tools
 which currently cannot run inside Sandstorm.
 
-Therefore, when *not* running inside Sansdtorm, you may use the following console
+Therefore, when *not* running inside Sandstorm, you may use the following console
 function to fake your user information:
 
     SandstormAccounts.setTestUserInfo({
@@ -122,16 +122,16 @@ Note that this functionality, like all of the package, is only enabled if you se
 
 ## Migrating from 0.1
 
-In version 0.1.x of this puackage, there was no `sandstormUser()` function; the
+In version 0.1.x of this package, there was no `sandstormUser()` function; the
 only mode of operation was through Meteor accounts. This had problems with
-permissions and anonymous users as described adove. Introducing `sandstormUser()`
+permissions and anonymous users as described above. Introducing `sandstormUser()`
 is a huge update.
 
 For almost all users, 0.2 should be a drop-in replacement for 0.1, only adding
 new features. Please note, though, two possible issues:
 
 * If you did not explicitly depend on `accounts-base` before, you must add this
-  dependency, since it is no longer implied by `accounts-sansdtorm`.
+  dependency, since it is no longer implied by `accounts-sandstorm`.
 * The `/.sandstorm-credentials` endpoint no longer exists. If you were directly
   fetching this undocumented endpoint before, you will need to switch your code
   to use `Meteor.sandstormUser()`.
